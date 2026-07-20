@@ -1,0 +1,62 @@
+name: Purge jsDelivr cache
+
+# Whenever an image lands on main, tell jsDelivr to drop its cached copy so the
+# CDN (and therefore the website) serves the new version within seconds instead
+# of waiting out its ~12h cache on the @main reference.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.png'
+      - '**.jpg'
+      - '**.jpeg'
+      - '**.webp'
+      - '**.svg'
+      - '**.gif'
+  # Lets you also run a full purge by hand from the Actions tab.
+  workflow_dispatch:
+
+# Never run two purges at once; let an in-flight one finish.
+concurrency:
+  group: purge-jsdelivr
+  cancel-in-progress: false
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Purge every image from jsDelivr
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY}"   # e.g. vistaspeechandswallowing/webimages
+          fail=0
+
+          # The repo is small, so purge all image assets on each push. Simple and
+          # robust — no need to diff which files changed. Read via process
+          # substitution (not a pipe) so the loop runs in this shell and the
+          # `fail` flag survives to the final check.
+          while IFS= read -r file; do
+            file="${file#./}"
+            url="https://purge.jsdelivr.net/gh/${repo}@main/${file}"
+            echo "Purging: ${file}"
+            code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' "${url}" || echo "000")
+            echo "  HTTP ${code}"
+            cat /tmp/resp.json 2>/dev/null || true
+            echo
+            if [ "${code}" != "200" ]; then
+              echo "  WARNING: purge did not return 200 for ${file}"
+              fail=1
+            fi
+          done < <(find . -type f \
+              \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \
+                 -o -iname '*.webp' -o -iname '*.svg' -o -iname '*.gif' \) \
+              -not -path './.git/*')
+
+          if [ "${fail}" -ne 0 ]; then
+            echo "One or more purges failed."
+            exit 1
+          fi
+          echo "All images purged."
